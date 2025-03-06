@@ -39,30 +39,48 @@ The http server triggers the custom event, and then the event handler gets run o
 script, similarly to how Fusion would normally run it.
 """
 
+import sys
+
+# Redirect standard error to a log file
+# log_file = "C:/Users/Administrator/fusion_script.log"  # Change path as needed
+# sys.stderr = open(log_file, "w")
+
+# # # Your script code goes here
+# print("Starting script...")  # This will still show in the console
+# raise ValueError("Something went wrong!")  # This will be written to the log file
+
 import adsk.core
 import adsk.fusion
-import hashlib
-import http.client
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import importlib
-import importlib.util
-import io
-import json
-import logging
-import logging.handlers
-import os
-import platform
-import re
-import socket
-import socketserver
-import struct
-import sys
-import threading
-import traceback
-from typing import Optional
-import urllib.parse
 
-VERSION = "1.6"
+debug_app = adsk.core.Application.get()
+debug_ui  = debug_app.userInterface
+
+# debug_app.log('BAM!', adsk.core.LogLevels.InfoLogLevel, adsk.core.LogTypes.ConsoleLogType)
+
+try:
+    import hashlib
+    import http.client
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import importlib
+    import importlib.util
+    import io
+    import json
+    import logging
+    import logging.handlers
+    import os
+    import re
+    import socket
+    import socketserver
+    import struct
+    import sys
+    import threading
+    import traceback
+    from typing import Optional
+    import urllib.parse
+except ModuleNotFoundError:
+    debug_ui.messageBox("Import Errors")
+
+VERSION = "1.2"
 
 # asynchronous event that will be used to launch a script inside fusion 360
 RUN_SCRIPT_EVENT = "fusion_idea_addin_run_script"
@@ -71,15 +89,8 @@ VERIFY_RUN_SCRIPT_EVENT = "fusion_idea_addin_verify_run_script"
 # asynchronous event that will be used to show an error dialog to the user
 ERROR_DIALOG_EVENT = "fusion_idea_addin_error_dialog"
 
-LOCALHOST_IPV6 = "::1"
-LOCALHOST_IPV4 = "127.0.0.1"
-MULTICAST_PORT = 1900
-# Random multicast group addresses in the "administrative" block:
-MULTICAST_GROUP_IPV6 = "ff01:fb68:e6b7:45f9:4acc:2559:6c6e:c014"
-MULTICAST_GROUP_IPV4 = "239.172.243.75"
-
 # If true, the user must confirm the initial connection of a debugger
-REQUIRE_CONFIRMATION = True
+REQUIRE_CONFIRMATION = False
 
 if REQUIRE_CONFIRMATION:
     try:
@@ -91,18 +102,14 @@ if REQUIRE_CONFIRMATION:
         import rsa
         del(sys.path[-1])
 
-
 def app():
     return adsk.core.Application.get()
-
 
 def ui():
     return app().userInterface
 
-
 logger = logging.getLogger("fusion_idea_addin")
 logger.propagate = False
-
 
 class AddIn(object):
     def __init__(self):
@@ -121,6 +128,7 @@ class AddIn(object):
         self._trusted_keys = {}
 
     def start(self):
+        # debug_ui.messageBox("Server Starting")
         try:
             self._logging_file_handler = logging.handlers.RotatingFileHandler(
                 filename=os.path.join(os.path.dirname(os.path.realpath(__file__)), "fusion_idea_addin_log.txt"),
@@ -169,7 +177,7 @@ class AddIn(object):
 
             # Run the http server on a random port, to avoid conflicts when multiple instances of Fusion 360 are
             # running.
-            self._http_server = HTTPServer(("localhost", 0), RunScriptHTTPRequestHandler)
+            self._http_server = HTTPServer(("localhost", 54321), RunScriptHTTPRequestHandler)
 
             http_server_thread = threading.Thread(target=self.run_http_server, daemon=True)
             http_server_thread.start()
@@ -179,6 +187,8 @@ class AddIn(object):
 
             ssdpv6_server_thread = threading.Thread(target=self.run_ssdpv6_server, daemon=True)
             ssdpv6_server_thread.start()
+            
+            # debug_ui.messageBox("Server Started")
         except Exception:
             logger.fatal("Error while starting fusion_idea_addin.", exc_info=sys.exc_info())
 
@@ -197,7 +207,7 @@ class AddIn(object):
                 self._ssdpv4_server = server
                 server.serve_forever()
         except Exception:
-            logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
+            logger.fatal("Error occurred while starting the ssdpv4 server.", exc_info=sys.exc_info())
 
     def run_ssdpv6_server(self):
         logger.debug("starting ssdp ipv6 server")
@@ -206,7 +216,7 @@ class AddIn(object):
                 self._ssdpv6_server = server
                 server.serve_forever()
         except Exception:
-            logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
+            logger.fatal("Error occurred while starting the ssdpv6 server.", exc_info=sys.exc_info())
 
     def get_trusted_key_nonce(self, key) -> Optional[int]:
         return self._trusted_keys.get(key)
@@ -215,6 +225,7 @@ class AddIn(object):
         self._trusted_keys[key] = nonce
 
     def stop(self):
+        # debug_ui.messageBox("Server Stopping")
         if self._http_server:
             try:
                 self._http_server.shutdown()
@@ -290,7 +301,7 @@ class AddIn(object):
         except Exception:
             ui().messageBox("Error while closing fusion_idea_addin's dialog logger.\n\n%s" % traceback.format_exc())
         self._logging_dialog_handler = None
-
+        # debug_ui.messageBox("Server Stopped")
 
 # noinspection PyUnresolvedReferences
 class RunScriptEventHandler(adsk.core.CustomEventHandler):
@@ -302,10 +313,12 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
     def notify(self, args):
         try:
             args = json.loads(args.additionalInfo)
+            # debug_ui.messageBox(f"Running script with args {args}")
             script_path = args.get("script")
             debug = int(args["debug"])
-            pydevd_path = args["pydevd_path"]
+            pydevd_path = "pydevd_path" #args["pydevd_path"]
 
+            # debug_ui.messageBox(f"Running script {script_path}")
             detach = script_path and debug
 
             if not script_path and not debug:
@@ -335,10 +348,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         # This mostly mimics the package name that Fusion uses when running the script
                         module_name = "__main__" + urllib.parse.quote(script_path.replace('.', '_'))
                         spec = importlib.util.spec_from_file_location(
-                            module_name, script_path,
-                            loader=importlib.machinery.SourceFileLoader(module_name, script_path),
-                            submodule_search_locations=[script_dir])
-
+                            module_name, script_path, submodule_search_locations=[script_dir])
                         module = importlib.util.module_from_spec(spec)
 
                         existing_module = sys.modules.get(module_name)
@@ -350,7 +360,8 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         sys.modules[module_name] = module
                         spec.loader.exec_module(module)
                         logger.debug("Running script")
-                        module.run({"isApplicationStartup": False})
+                        # TODO: Changed
+                        module.run() # ({"isApplicationStartup": False})
                     except Exception:
                         logger.fatal("Unhandled exception while importing and running script.",
                                      exc_info=sys.exc_info())
@@ -410,7 +421,8 @@ class VerifyRunScriptEventHandler(adsk.core.CustomEventHandler):
 
             if return_value.upper() == expected_hash.upper():
                 inner_request = json.loads(request_json["message"])
-                addin.set_trusted_key_nonce(pubkey_string, int(inner_request["nonce"]))
+                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
+                # debug_ui.messageBox("Fire Custom Event {}".format(request_json["message"]))
                 adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
             else:
                 ui().messageBox("The public key does not match. Aborting.")
@@ -446,15 +458,16 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
 
         try:
             request_json = json.loads(body)
+            # debug_ui.messageBox(f"Received request with body {request_json}")
 
             if REQUIRE_CONFIRMATION:
                 pubkey = rsa.PublicKey(int(request_json["pubkey_modulus"]), int(request_json["pubkey_exponent"]))
                 pubkey_string = request_json["pubkey_modulus"] + ":" + request_json["pubkey_exponent"]
                 rsa.verify(request_json["message"].encode(), bytes.fromhex(request_json["signature"]), pubkey)
 
-                previous_nonce = addin.get_trusted_key_nonce(pubkey_string)
+                nonce = addin.get_trusted_key_nonce(pubkey_string)
 
-                if previous_nonce is None:
+                if nonce is None:
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"done")
@@ -464,22 +477,23 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 inner_request = json.loads(request_json["message"])
 
-                current_nonce = int(inner_request["nonce"])
+                if inner_request["nonce"] <= nonce:
+                    raise ValueError("Invalid nonce")
 
-                if current_nonce <= previous_nonce:
-                    raise ValueError("Invalid nonce: %s/%s" % (current_nonce, previous_nonce))
+                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
 
-                addin.set_trusted_key_nonce(pubkey_string, current_nonce)
-
-            adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
-
+            # debug_ui.messageBox("Fire Custom Event 2 {}".format(request_json["message"]))
+            # TODO: Fix
+            adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, json.dumps(request_json["message"]))
+            #'{"script":"C:\\\\Users\\\\Administrator\\\\scripts\\\\fusion_script.py", "debug":"0", "nonce":"12345"}')
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"done")
         except Exception:
             self.send_response(500)
             self.end_headers()
-            self.wfile.write(traceback.format_exc().encode())
+            self.wfile.write(str(json.loads(body)["message"]).encode() + traceback.format_exc().encode())
+            # self.wfile.write(traceback.format_exc().encode())
             logger.error("An error occurred while handling http request.", exc_info=sys.exc_info())
 
 
@@ -518,44 +532,51 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
 
 class SSDPV6Server(socketserver.UDPServer):
 
+    # Random "interface local" multicast address
+    MULTICAST_ADDR = "ff01:fb68:e6b7:45f9:4acc:2559:6c6e:c014"
+
     def __init__(self, debug_port):
         self.debug_port = debug_port
         self.allow_reuse_address = True
         self.address_family = socket.AF_INET6
-        super().__init__(("", MULTICAST_PORT), SSDPRequestHandler)
+        super().__init__(("", 1900), SSDPRequestHandler)
 
     def server_bind(self):
+        # debug_ui.messageBox(f"Superbind")
         super().server_bind()
 
-        if hasattr(socket, "IPPROTO_IPV6"):
-            IPPROTO_IPV6 = socket.IPPROTO_IPV6
+        if hasattr(socket, "IPPROTO_V6"):
+            IPPROTO_V6 = socket.IPPROTO_V6
         else:
             # This isn't present in Fusion's Python 3.7 distribution, at least on Windows.
             # This is the value from, e.g. glibc's <netinet/in.h>
-            IPPROTO_IPV6 = 41
+            IPPROTO_V6 = 41
 
-        if platform.system() != "Windows":
+        # if_nameindex isn't implemented on Windows (at least, prior to Python 3.8)
+        if hasattr(socket, "if_nameindex"):
             # An error is thrown if we try to use INADDR_ANY on mac. But the loopback interface does work, so we
             # have that going for us. It's typically called lo0, but we'll look for "lo", or "loNNN" just in case.
+            # debug_ui.messageBox(f"Hasattr")
             found_iface = False
             for (index, name) in socket.if_nameindex():
+                # debug_ui.messageBox(f"index {index} name {name}")
                 if re.fullmatch("^lo[0-9]+$", name):
-                    req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, MULTICAST_GROUP_IPV6), index)
-                    self.socket.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
+                    req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), index)
+                    self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
                     found_iface = True
                     break
             if not found_iface:
+                # debug_ui.messageBox("No iface")
                 raise Exception("Could not start ssdp server")
         else:
             # On Windows, hopefully we can rely on INADDR_ANY choosing an appropriate interface. We don't really care
             # what interface, because the java side seems to send a packet on all possible interfaces (from watching
             # wireshark at least..), but since it's a node-local multicast address, the packet shouldn't actually be
             # sent to any network, regardless of which interface is used.
-            # Note that it doesn't seem possible to send multicasts on the loopback interface on Windows.
-            req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, MULTICAST_GROUP_IPV6), socket.INADDR_ANY)
-            self.socket.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
-
-        logger.debug("SSDP server IPv6 bound to IP address: %s, Port: %d" % self.socket.getsockname()[:2])
+            # Note that it doesn't seem possible to send multicasts on the loopback insterface on Windows.
+            # debug_ui.messageBox(f"Don't has attr")
+            req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), socket.INADDR_ANY)
+            self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
@@ -563,16 +584,18 @@ class SSDPV6Server(socketserver.UDPServer):
 
 class SSDPV4Server(socketserver.UDPServer):
 
+    # Random address in the "administrative" block
+    MULTICAST_GROUP = "239.172.243.75"
+
     def __init__(self, debug_port):
         self.debug_port = debug_port
         self.allow_reuse_address = True
-        super().__init__(("", MULTICAST_PORT), SSDPRequestHandler)
+        super().__init__(("", 1900), SSDPRequestHandler)
 
     def server_bind(self):
         super().server_bind()
-        req = struct.pack("=4s4s", socket.inet_aton(MULTICAST_GROUP_IPV4), socket.inet_aton(LOCALHOST_IPV4))
+        req = struct.pack("=4s4s", socket.inet_aton(self.MULTICAST_GROUP), socket.inet_aton("127.0.0.1"))
         self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, req)
-        logger.debug("SSDP server IPv4 bound to IP address: %s, Port: %d" % self.socket.getsockname())
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
@@ -588,3 +611,4 @@ def run(_):
 def stop(_):
     logger.debug("stopping")
     addin.stop()
+
