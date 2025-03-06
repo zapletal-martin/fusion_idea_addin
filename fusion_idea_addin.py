@@ -77,6 +77,7 @@ try:
     import traceback
     from typing import Optional
     import urllib.parse
+    import base64
 except ModuleNotFoundError:
     debug_ui.messageBox("Import Errors")
 
@@ -314,14 +315,15 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
         try:
             args = json.loads(args.additionalInfo)
             # debug_ui.messageBox(f"Running script with args {args}")
-            script_path = args.get("script")
+            stript_name = args.get("script_name")
+            script_content = base64.b64decode(args.get("script")).decode()
             debug = int(args["debug"])
             pydevd_path = "pydevd_path" #args["pydevd_path"]
 
             # debug_ui.messageBox(f"Running script {script_path}")
-            detach = script_path and debug
+            detach = stript_name and debug
 
-            if not script_path and not debug:
+            if not stript_name and not debug:
                 logger.warning("No script provided and debugging not requested. There's nothing to do.")
                 return
 
@@ -340,15 +342,13 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                     finally:
                         del(sys.path[-1])  # pydevd_attach_to_process dir
 
-                if script_path:
-                    script_path = os.path.abspath(script_path)
-                    script_dir = os.path.dirname(script_path)
-
+                if stript_name:
+                  
                     try:
                         # This mostly mimics the package name that Fusion uses when running the script
-                        module_name = "__main__" + urllib.parse.quote(script_path.replace('.', '_'))
-                        spec = importlib.util.spec_from_file_location(
-                            module_name, script_path, submodule_search_locations=[script_dir])
+                        module_name = "__main__" + urllib.parse.quote(stript_name.replace('.', '_'))
+
+                        spec = importlib.util.spec_from_loader(module_name, loader=None)
                         module = importlib.util.module_from_spec(spec)
 
                         existing_module = sys.modules.get(module_name)
@@ -358,8 +358,9 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         self.unload_submodules(module_name)
 
                         sys.modules[module_name] = module
-                        spec.loader.exec_module(module)
+                        # spec.loader.exec_module(module)
                         logger.debug("Running script")
+                        exec(script_content, module.__dict__)
                         # TODO: Changed
                         module.run() # ({"isApplicationStartup": False})
                     except Exception:
@@ -450,6 +451,16 @@ class FusionErrorDialogLoggingHandler(logging.Handler):
 class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
     """An HTTP request handler that queues an event in the main thread of fusion 360 to run a script."""
 
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.end_headers()
+
     # noinspection PyPep8Naming
     def do_POST(self):
         logger.debug("Got an http request.")
@@ -486,6 +497,7 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
             # TODO: Fix
             adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, json.dumps(request_json["message"]))
             #'{"script":"C:\\\\Users\\\\Administrator\\\\scripts\\\\fusion_script.py", "debug":"0", "nonce":"12345"}')
+            
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"done")
