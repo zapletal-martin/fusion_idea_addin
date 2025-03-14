@@ -316,6 +316,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
             args = json.loads(args.additionalInfo)
             # debug_ui.messageBox(f"Running script with args {args}")
             stript_name = args.get("script_name")
+            params = args.get("params")
             script_content = base64.b64decode(args.get("script")).decode()
             debug = int(args["debug"])
             pydevd_path = "pydevd_path" #args["pydevd_path"]
@@ -362,7 +363,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         logger.debug("Running script")
                         exec(script_content, module.__dict__)
                         # TODO: Changed
-                        module.run() # ({"isApplicationStartup": False})
+                        module.run(params) # ({"isApplicationStartup": False})
                     except Exception:
                         logger.fatal("Unhandled exception while importing and running script.",
                                      exc_info=sys.exc_info())
